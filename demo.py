@@ -5,9 +5,21 @@ import time
 
 import cv2
 import numpy as np
-
+import pyk4a
+from pyk4a import depth_image_to_point_cloud, Config, PyK4A
 import fusion
+import icp.basicICP as icp
 
+
+def configureCamera():
+  k4a = PyK4A(
+    Config(
+      color_resolution=pyk4a.ColorResolution.RES_720P,
+      depth_mode=pyk4a.DepthMode.NFOV_UNBINNED,
+      synchronized_images_only=False
+    )
+  )
+  return k4a
 
 if __name__ == "__main__":
   # ======================================================================================================== #
@@ -41,6 +53,22 @@ if __name__ == "__main__":
 
   # Loop through RGB-D images and fuse them together
   t0_elapse = time.time()
+
+  # i == 0:
+  color_image = cv2.cvtColor(cv2.imread("data/frame-%06d.color.jpg"%(0)), cv2.COLOR_BGR2RGB)
+  depth_im = cv2.imread("data/frame-%06d.depth.png"%(0),-1).astype(float)
+  depth_im /= 1000.
+  depth_im[depth_im == 65.535] = 0
+  cam_pose = np.loadtxt("data/frame-%06d.pose.txt" % (0))
+
+  k4a = configureCamera()
+  k4a.start()
+  k4a.whitebalance = 4510
+
+  curr = depth_image_to_point_cloud(depth_im, k4a.calibration, True)
+  height = depth_im.shape[0]
+  width = depth_im.shape[1]
+
   for i in range(n_imgs):
     print("Fusing frame %d/%d"%(i+1, n_imgs))
 
@@ -49,7 +77,13 @@ if __name__ == "__main__":
     depth_im = cv2.imread("data/frame-%06d.depth.png"%(i),-1).astype(float)
     depth_im /= 1000.
     depth_im[depth_im == 65.535] = 0
-    cam_pose = np.loadtxt("data/frame-%06d.pose.txt"%(i))
+
+    prev = curr
+    curr = depth_image_to_point_cloud(depth_im)
+    cam_pose = icp.icp_point_to_plane(prev, curr)
+    with open('data_pose/frame-' + "{:02d}".format(i) + '.pose.txt', 'w') as pose_file:
+      for row in cam_pose:
+        pose_file.write(row[0] + ' ' + row[1] + ' ' + row[2] + ' ' + row[3] + '\n')
 
     # Integrate observation into voxel volume (assume color aligned with depth)
     tsdf_vol.integrate(color_image, depth_im, cam_intr, cam_pose, obs_weight=1.)
